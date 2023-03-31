@@ -1,0 +1,1726 @@
+---
+title: "The code for: Role of urban vegetation in air phytoremediation: Differences between scientific research and environmental management perspectives"
+author: "Cheng gong"
+date: "2023/3/21"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, eval = TRUE, message = TRUE, 
+                      error = FALSE)
+```
+
+# Load packages
+```{r load_packages}
+library(brms)
+library(tidyverse)
+library(ggridges)
+library(tidybayes)
+library(glue)
+library(zCompositions)
+library(ggpubr)
+```
+
+# Data preparing
+
+```{r load_data_from_files}
+# load the data for meta-analysis
+es_mergednox <- read_csv("./data/es_nox_pooled.csv")
+es_mergedo3 <- read_csv("./data/es_o3_pooled.csv")
+es_mergedpm <- read_csv("./data/es_pm_pooled.csv")
+es_mergedso2 <- read_csv("./data/es_so2_pooled.csv")
+es_mergedgas <- read_csv("./data/es_g_pooled.csv")
+es_mergedsolid <- read_csv("./data/es_s_pooled.csv")
+es_merged <- read_csv("./data/es_allexp_pooled.csv")
+es_regdata <- readRDS("./data/es_regdata.RData")
+es_regdiv <- readRDS("./data/es_regdiv.RData")
+# color data for forest plot
+color_forest <- readRDS("./data/color_forest.RData")
+```
+
+# Figure 1: Effect size of pollutants reduction
+
+## set the prior information for models
+
+```{r set_prior_of_model}
+ priors_nox <- c(prior(normal(-0.3,0.5), class = Intercept),
+              prior(cauchy(0,0.5), class = sd))
+ priors_pm <- priors_nox
+ priors_so2 <- priors_nox
+ priors_gas <- priors_nox
+ priors_solid <- priors_nox
+ priors_o3 <- c(prior(normal(0.1, 0.5), class = Intercept),
+                prior(cauchy(0, 0.5), class = sd))
+```
+
+## build bayesian random-effect model
+
+```{r build_model_random_intercept}
+# Pooled effect for PM
+bay_pm <- brm(es_adj|se(se_adj) ~ 1 + (1|caselab),
+              data = es_mergedpm,
+              family = "gaussian",
+              prior = priors_pm, 
+              iter = 5000,
+              seed = 123,
+              control = list(adapt_delta = 0.99),
+              cores = 8)
+
+# Pooled effect for SO2
+bay_so2 <- brm(es_adj|se(se_adj) ~ 1 + (1|caselab),
+               data = es_mergedso2,
+               family = "gaussian",
+               prior = priors_so2, 
+               iter = 5000,
+               seed = 123,
+               control = list(adapt_delta = 0.99),
+               cores = 8)
+
+# Pooled effect for O3
+bay_o3 <- brm(es_adj|se(se_adj) ~ 1 + (1|caselab),
+              data = es_mergedo3,
+              family = "gaussian",
+              prior = priors_o3, 
+              iter = 5000,
+              seed = 123,
+              control = list(adapt_delta = 0.99),
+              cores = 8)
+
+# Pooled effect for NOx
+bay_nox <- brm(es_adj|se(se_adj) ~ 1 + (1|caselab), 
+               data = es_mergednox,
+               family = "gaussian",
+               prior = priors_nox,
+               iter = 10000,
+               seed = 123, 
+               control = list(adapt_delta = 0.995),
+               cores = 8)
+# save bayesian models to files 			   
+saveRDS(bay_nox, file = "./model/bay_nox.RData")
+saveRDS(bay_o3, file = "./model/bay_o3.RData")
+saveRDS(bay_so2, file = "./model/bay_so2.RData")
+saveRDS(bay_pm, file = "./model/bay_pm.RData")
+```
+
+## Draw the forest plot for reduction effect
+
+```{r prepare_data_for_drawing}
+# load model for drawing
+bay_nox <- readRDS(file = "./model/bay_nox.RData")
+bay_o3 <- readRDS(file = "./model/bay_o3.RData")
+bay_so2 <- readRDS(file = "./model/bay_so2.RData")
+bay_pm <- readRDS(file = "./model/bay_pm.RData")
+bm_nox <- bay_nox$fit
+bm_o3 <- bay_o3$fit
+bm_so2 <- bay_so2$fit
+bm_pm <- bay_pm$fit
+
+# A simple function to extract numbers of observations in the bayesian model
+numoflevesl <- function(brmsfit){
+  dim(ranef(brmsfit)[[1]])[1]
+}
+
+numobs_case <- c(numoflevesl(bay_nox),numoflevesl(bay_o3),
+                 numoflevesl(bay_so2),numoflevesl(bay_pm))
+
+# extract posterior samples for fixed effect				 
+posterior_noxp <- bm_nox %>%
+        spread_draws(b_Intercept) %>%
+        mutate(caselab = "NOx",
+               fillc = color_forest$nox_fill)
+posterior_o3p <- bm_o3 %>%
+        spread_draws(b_Intercept) %>%
+        mutate(caselab = "O3",
+               fillc = color_forest$o3_fill)
+posterior_so2p <- bm_so2 %>%
+        spread_draws(b_Intercept) %>%
+        mutate(caselab = "SO2",
+               fillc = color_forest$so2_fill)
+posterior_pmp <- bm_pm %>%
+        spread_draws(b_Intercept) %>%
+        mutate(caselab = "PM",
+               fillc = color_forest$pm_fill)
+# bind all effect together
+posterior_allp <- bind_rows(posterior_noxp, posterior_o3p,
+                            posterior_so2p, posterior_pmp)
+posterior_allp <- posterior_allp %>%
+        mutate(caselab = factor(caselab, levels = c("NOx", "O3", "SO2", "PM")))
+
+posterior_allp_summ <- posterior_allp %>%
+        group_by(caselab) %>%
+        mean_qi(b_Intercept, .width = 0.95) %>%
+        rename(lower95 = .lower, upper95 = .upper) %>%
+        mutate(mean_l = sprintf("%0.2f", b_Intercept),
+        l95 = sprintf("%0.2f", lower95),
+        u95 = sprintf("%0.2f", upper95)) %>%
+        mutate(n.obs = as.character(numobs_case))
+
+lkup <- data.frame(p_type1 = c("NOX", "O3", "SO2", "PM"),
+                   p_type1f = c("NOx", "O3", "SO2", "PM"),
+                   stringsAsFactors = FALSE)
+true_obs_all <- es_merged %>% 
+        dplyr::select(caselab, p_type1, es_adj, var_adj) %>%
+        left_join(lkup, by = "p_type1") %>% 
+        mutate(p_type1f = factor(p_type1f, levels =c("NOx", "O3", "SO2", "PM"))) %>%
+        rename(b_Intercept = es_adj, clab = caselab, caselab = p_type1f)
+```
+
+```{r draw_the_plot}
+theme_forest2 <- theme(axis.title = element_text(size = 25, colour = "black"), 
+                      axis.text.x = element_text(size = 20, colour = "black"),
+                      axis.text.y = element_text(size = 20, colour = "black"),
+                      panel.background = element_rect(fill = "white", colour = "black"),
+                      panel.grid = element_blank(),
+                      legend.position = "none",
+                      plot.margin = unit(rep(1,4), "cm"))
+
+fig_forest_allp <- posterior_allp %>% 
+        ggplot(aes(x = b_Intercept, y = caselab, fill = caselab)) +   
+        stat_halfeye(.width = 0.95, size = 2, point_interval = mean_qi, scale = 0.5) + 
+        geom_boxplot(data = true_obs_all, aes(x = b_Intercept, y = caselab, fill = caselab),
+                     width = 0.05, position = position_nudge(y = -0.06),outlier.alpha = 0) + 
+        geom_vline(xintercept = 0, linetype = 2, size = 1.2, color = "red") + 
+        scale_fill_manual(values = as.character(unlist(color_forest)[1:4])) +
+        scale_y_discrete(labels = c(expression(NO[x]), expression(O[3]),
+                                    expression(SO[2]), expression(PM))) + 
+        geom_text(data = posterior_allp_summ, 
+                  aes(x = 0.3,
+                      label = glue("{n.obs},    {mean_l},    [{l95}, {u95}]")),
+                  hjust = "outward", size = 6,
+                  position = position_nudge(y = 0.2)) + 
+        annotate(geom = "text", x = 0.3, y = 4.5, 
+                 label = "n,    mean,    95%CrI",
+                 hjust = "outward", size = 6) + 
+        xlim(-1.5, 1.5) + 
+        labs(y = "",
+             x = "Effect size (LRR) of pollutants reduction") + 
+        theme_forest2
+
+ggsave("./fig/fig1.eps", plot = fig_forest_allp,
+       width = 250, height = 200, units = "mm", limitsize = FALSE,
+       scale = 1)        
+```
+
+
+# Figure 2: Sub-group analysis: distribution pattern, seasons, types of greenspaces
+
+## Define the function for sub-meta analysis
+```{r define_submeta}
+# A function to automatically build model formula
+paste_formual <- function(popef, grpef, intercept = TRUE){
+  left <- "es_adj|se(se_adj) ~ "
+  random <- paste("(", "1", "|", grpef, ")")
+  if(!intercept){
+    popef <- paste(popef, "-1", sep = "")
+  }
+  fma <- paste(left, popef, "+", random, sep = "")
+  return(fma)
+}
+
+# A function for running the sub-meta analysis
+# data: the data.frame object
+# popef: population effect (fixed effect)
+# grpef : group effect (random effect), outer group should be the first element, then inner group
+# brmspara: the parameters for running the brms model (MC sampling parameters included)
+# nested: should the random factors be nested in the model
+# onlynested: only fited the nested model
+# intercept: Compared with intercept?
+# This function has a large memory overhead and is more stable on systems with more than 16gb of memory
+sub_single <- function(data, popef, grpef, brmspara, nested = FALSE, onlynested = FALSE, 
+                       intercept = TRUE){
+  if (nested){
+    nested_grp <- paste(grpef[1], grpef[2], sep = "/")
+    grpef <- c(grpef, nested_grp)
+  }
+  mod_formula <- t(outer(popef, grpef, FUN = paste_formual, intercept = intercept))
+  mod_names <- t(outer(popef, grpef, FUN = paste, sep = "_"))
+  mod_formula <- as.character(mod_formula)
+  mod_names <- as.character(mod_names)
+  if(!onlynested){
+    print(paste("We have", length(mod_formula), "models.", sep = " "))
+    brms_list <- vector(mode = "list", length = length(mod_formula))
+    for(i in seq_along(mod_formula)){
+      print(paste("Fitting model:", mod_formula[i], sep = " "))
+      mod_i <- brm(formula = formula(mod_formula[i]), data = data,
+                   cores = brmspara$cores, seed = brmspara$seed, iter = brmspara$iter,
+                   control = list(max_treedepth = brmspara$max_treedepth,
+                                  adapt_delta = brmspara$adapt_delta))
+      brms_list[[i]] <- mod_i
+    }
+    names(brms_list) <- mod_names
+  }else{
+    # nested random term
+    print(paste("We have", length(mod_formula[3]), "models.", sep = " "))
+    brms_list <- vector(mode = "list", length = length(mod_formula[3]))
+    print(paste("Fitting model:", mod_formula[3], sep = " "))
+    mod_i <- brm(formula = formula(mod_formula[3]), data = data,
+                  cores = brmspara$cores, seed = brmspara$seed, iter = brmspara$iter,
+                  control = list(max_treedepth = brmspara$max_treedepth,
+                                adapt_delta = brmspara$adapt_delta))
+    brms_list[[1]] <- mod_i
+    names(brms_list) <- mod_names[3]
+  }
+  return(brms_list)
+}
+```
+
+## build sub meta bayesian model
+
+### NOx sub-meta
+
+#### subpoint vs sepoint
+```{r submeta_nox_point_dis}
+df_nox <- es_regdata %>% filter(p_type1 == "NOX")
+popef <- c("point_dis")
+grpef <- c("caselab")
+brmspara <- list(cores = 8L, seed = 1234, prior = NULL, iter = 5000,
+                 max_treedepth = 12, adapt_delta = 0.99)
+
+submeta_nox <- sub_single(data = df_nox, popef = popef, grpef = grpef, 
+                          nested = FALSE, brmspara = brmspara, intercept = FALSE)
+saveRDS(submeta_nox, "./model/submeta_nox_pointdis.RData")
+```
+
+#### leaf vs fallen (seasons of the year)
+
+```{r submeta_nox_seasons}
+popef <- c("leaf")
+brmspara <- list(cores = 8L, seed = 1234, prior = NULL, iter = 5000,
+                 max_treedepth = 12, adapt_delta = 0.99)
+
+submeta_nox <- sub_single(data = df_nox, popef = popef, grpef = grpef, 
+                          nested = FALSE, brmspara = brmspara, intercept = FALSE)
+saveRDS(submeta_nox, "./model/submeta_nox_leaf.RData")
+```
+
+#### landtype_exp
+
+```{r submeta_nox2}
+df_nox <- rename(df_nox, gi = landtype_exp)
+popef <- c("gi")
+grpef <- c("stulab", "caselab")
+brmspara <- list(cores = 8L, seed = 1234, prior = NULL, iter = 5000,
+                 max_treedepth = 12, adapt_delta = 0.99)
+
+submeta_nox <- sub_single(data = df_nox, popef = popef, grpef = grpef, 
+                          nested = TRUE, onlynested = TRUE, brmspara = brmspara, 
+                          intercept = FALSE)
+saveRDS(submeta_nox, "./model/submeta_nox_gi.RData")
+```
+
+### O3 sub-meta
+
+#### subpoint vs sepoint
+```{r submeta_o3}
+df_o3 <- es_regdata %>% filter(p_type1 == "O3")
+popef <- c("point_dis")
+grpef <- c("caselab")
+brmspara <- list(cores = 8L, seed = 1234, prior = NULL, iter = 5000,
+                 max_treedepth = 11, adapt_delta = 0.99)
+
+submeta_o3 <- sub_single(data = df_o3, popef = popef, grpef = grpef, 
+                          nested = FALSE, brmspara = brmspara, intercept = FALSE)
+saveRDS(submeta_o3, "./model/submeta_o3_pointdis.RData")
+```
+
+#### leaf vs fallen (seasons of the year)
+
+```{r submeta_nox2}
+popef <- c("leaf")
+grpef <- c("stulab")
+brmspara <- list(cores = 8L, seed = 1234, prior = NULL, iter = 5000,
+                 max_treedepth = 11, adapt_delta = 0.99)
+
+submeta_o3 <- sub_single(data = df_o3, popef = popef, grpef = grpef, 
+                          nested = FALSE, brmspara = brmspara, intercept = FALSE)
+saveRDS(submeta_o3, "./model/submeta_o3_leaf.RData")
+```
+
+
+#### landtype_exp
+
+```{r submeta_nox2}
+df_o3 <- rename(df_o3, gi = landtype_exp)
+popef <- c("gi")
+grpef <- c("caselab")
+brmspara <- list(cores = 8L, seed = 1234, prior = NULL, iter = 5000,
+                 max_treedepth = 11, adapt_delta = 0.99)
+
+submeta_o3 <- sub_single(data = df_o3, popef = popef, grpef = grpef, 
+                          nested = FALSE, brmspara = brmspara, intercept = FALSE)
+saveRDS(submeta_o3, "./model/submeta_o3_gi.RData")
+```
+
+### PM sub-meta
+
+#### subpoint vs sepoint
+```{r submeta_PM}
+df_pm <- es_regdata %>% filter(p_type1 == "PM")
+popef <- c("point_dis")
+grpef <- c("caselab")
+brmspara <- list(cores = 8L, seed = 1234, prior = NULL, iter = 5000,
+                 max_treedepth = 11, adapt_delta = 0.99)
+
+submeta_pm <- sub_single(data = df_pm, popef = popef, grpef = grpef, 
+                          nested = FALSE, brmspara = brmspara, intercept = FALSE)
+saveRDS(submeta_pm, "./model/submeta_pm_pointdis.RData")
+```
+
+#### leaf vs fallen (seasons of the year)
+
+```{r submeta_pm}
+popef <- c("leaf")
+brmspara <- list(cores = 8L, seed = 1234, prior = NULL, iter = 5000,
+                 max_treedepth = 11, adapt_delta = 0.99)
+
+submeta_pm <- sub_single(data = df_pm, popef = popef, grpef = grpef, 
+                          nested = FALSE, brmspara = brmspara, intercept = FALSE)
+saveRDS(submeta_pm, "./model/submeta_pm_leaf.RData")
+```
+
+
+#### landtype_exp
+
+```{r submeta_pm}
+df_pm <- rename(df_pm, gi = landtype_exp)
+popef <- c("gi")
+grpef <- c("stulab", "caselab")
+brmspara <- list(cores = 8L, seed = 1234, prior = NULL, iter = 5000,
+                 max_treedepth = 11, adapt_delta = 0.99)
+
+submeta_pm <- sub_single(data = df_pm, popef = popef, grpef = grpef, 
+                          nested = TRUE, onlynested = TRUE, brmspara = brmspara, 
+                         intercept = FALSE)
+saveRDS(submeta_pm, "./model/submeta_pm_gi.RData")
+```
+
+### SO2 sub-meta
+
+#### subpoint vs sepoint
+```{r submeta_SO2}
+df_so2 <- es_regdata %>% filter(p_type1 == "SO2")
+popef <- c("point_dis")
+grpef <- c("caselab")
+brmspara <- list(cores = 8L, seed = 1234, prior = NULL, iter = 5000,
+                 max_treedepth = 11, adapt_delta = 0.99)
+
+submeta_so2 <- sub_single(data = df_so2, popef = popef, grpef = grpef, 
+                          nested = FALSE,brmspara = brmspara, 
+                          intercept = FALSE)
+saveRDS(submeta_so2, "./model/submeta_so2_pointdis.RData")
+```
+
+#### leaf vs fallen
+
+```{r submeta_pm}
+popef <- c("leaf")
+grpef <- c("stulab")
+brmspara <- list(cores = 8L, seed = 1234, prior = NULL, iter = 5000,
+                 max_treedepth = 11, adapt_delta = 0.99)
+
+submeta_so2 <- sub_single(data = df_so2, popef = popef, grpef = grpef, 
+                          nested = FALSE, brmspara = brmspara, intercept = FALSE)
+saveRDS(submeta_so2, "./model/submeta_so2_leaf.RData")
+```
+
+
+#### landtype_exp
+
+```{r submeta_pm}
+df_so2 <- rename(df_so2, gi = landtype_exp)
+popef <- c("gi")
+grpef <- c("stulab", "caselab")
+# only 1 observations in park group, remove it.
+df_so2 <- filter(df_so2, gi != "Park")
+brmspara <- list(cores = 8L, seed = 1234, prior = NULL, iter = 4000,
+                 max_treedepth = 13, adapt_delta = 0.99)
+
+submeta_so2 <- sub_single(data = df_so2_or, popef = popef, grpef = grpef, 
+                          nested = TRUE, onlynested = TRUE, brmspara = brmspara, 
+                          intercept = FALSE)
+saveRDS(submeta_so2, "./model/submeta_so2_gi.RData")
+```
+
+## draw the results of sub-meta
+
+### load models
+
+```{r load_submeta_model}
+# nox
+sub_nox_pointdis <- readRDS("./model/submeta_nox_pointdis.RData")
+sub_nox_leaf <- readRDS("./model/submeta_nox_leaf.RData")
+sub_nox_gi <- readRDS("./model/submeta_nox_gi.RData")
+# o3
+sub_o3_pointdis <- readRDS("./model/submeta_o3_pointdis.RData")
+sub_o3_leaf <- readRDS("./model/submeta_o3_leaf.RData")
+sub_o3_gi <- readRDS("./model/submeta_o3_gi.RData")
+# so2
+sub_so2_pointdis <- readRDS("./model/submeta_so2_pointdis.RData")
+sub_so2_leaf <- readRDS("./model/submeta_so2_leaf.RData")
+sub_so2_gi <- readRDS("./model/submeta_so2_gi.RData")
+# pm
+sub_pm_pointdis <- readRDS("./model/submeta_pm_pointdis.RData")
+sub_pm_leaf <- readRDS("./model/submeta_pm_leaf.RData")
+sub_pm_gi <- readRDS("./model/submeta_pm_gi.RData")
+```
+
+### function for drawing
+```{r build_function_to_draw_submeta}
+# This function draw information from the a brmsfit object, and applied a simple test of hypothesis
+info_submeta <- function(brmsfit, usehyp = TRUE){
+  r2 <- bayes_R2(brmsfit)
+  fef <- fixef(brmsfit)
+  hypl <- combn(rownames(fef), 2)
+  hypl <- apply(hypl, 2, paste, collapse = "<")
+  if (usehyp){
+    hyp_res <- lapply(hypl, 
+                      FUN = function(x){hypothesis(brmsfit, x)})
+  }else{
+    hyp_res <- NULL
+  }
+  
+  return(list(r2 = r2, fixef = fef, hyp = hyp_res))
+}
+
+# This function draw posterior samples from a brmsfit object and return a summary of posterior samples.
+extract_submeta <- function(brmsfit, trtname, pname){
+  post_samples <- posterior_samples(brmsfit, "^b")
+  df_o <- brmsfit$data
+  mod_name <- colnames(df_o)[3]
+  colnames(df_o)[3] <- "mods"
+  n_obs <- df_o %>% count(mods)
+  n_obs$trtname <- trtname
+  n_obs <- n_obs %>% arrange(trtname)
+  colnames(post_samples) <- trtname
+  post_samples <- post_samples %>% 
+    pivot_longer(cols = all_of(trtname), 
+    values_to = "value", names_to = "types") %>%
+    mutate(mods = mod_name, 
+           pollutants = pname)
+  post_summ <- post_samples %>%
+    group_by(types) %>%
+    mean_qi(value, width = c(0.95)) %>%
+    rename(lower95 = value.lower, upper95 = value.upper) %>%
+    mutate(mods = mod_name) %>%
+    mutate(nobs = n_obs$n, pollutants = pname)
+    return(list(samples = post_samples,
+                summarise = post_summ))
+}
+```
+
+### point distribution
+
+```{r draw_submeta_pointdis}
+trtname <- c("Separate Points", "Sub-points")
+nl <- c("NOx", "O3", "SO2", "PM")
+point_nox <- extract_submeta(sub_nox_pointdis$point_dis_caselab, trtname, "NOx")
+point_o3 <- extract_submeta(sub_o3_pointdis$point_dis_caselab, trtname, "O3")
+point_so2 <- extract_submeta(sub_so2_pointdis$point_dis_caselab, trtname, "SO2")
+point_pm <- extract_submeta(sub_pm_pointdis$point_dis_caselab, trtname, "PM")
+
+post_pointdis <- bind_rows(point_nox$samples, point_o3$samples, point_so2$samples, point_pm$samples)
+pointdis_summ <- bind_rows(point_nox$summarise, point_o3$summarise, point_so2$summarise, 
+                           point_pm$summarise)
+post_pointdis <- post_pointdis %>%
+  mutate(pollutants = factor(pollutants, levels = nl))
+pointdis_summ <- pointdis_summ %>%
+  mutate(pollutants = factor(pollutants, levels = nl))
+pointdis_summ <- pointdis_summ %>% 
+  mutate(l95 = sprintf("%0.2f", lower95),
+         u95 = sprintf("%0.2f", upper95),
+         val = sprintf("%0.2f", value))
+ant_lb <- "n,   mean,   95%CrI"
+
+submeta_theme <- theme(panel.grid = element_blank(), 
+                       panel.background = element_rect(fill = "white", color = "black"),
+                       axis.title = element_text(size = 20), 
+                       axis.text.x = element_text(size = 18), 
+                       axis.text.y = element_text(size = 18), 
+                       legend.position = "bottom", 
+                       legend.text = element_text(size = 15))
+y_axlb <- c("NOx" = expression(NO[x]), 
+            "O3" = expression(O[3]),
+            "SO2" = expression(SO[2]),
+            "PM" = expression(PM))
+
+fig_subpoint <- ggplot(data = post_pointdis, aes(x = value, y = pollutants, fill = types)) + 
+  geom_text(data = pointdis_summ, aes(label = glue("n={nobs}, {val}, [{l95}, {u95}]"), x = 0.5), hjust = "outward", vjust = 3.5, position = position_dodge(1), size = 6) + 
+  stat_halfeye(.width = 0.95, size = 2, 
+               position = position_dodge(1), 
+               point_interval = mean_qi, scale = 1) + 
+  geom_vline(xintercept = 0, linetype = "dashed", size = 1, color = "steelblue") + 
+  geom_hline(yintercept = c(1.35, 2.36, 3.35), linetype = "twodash", color = "grey", size = 1) + 
+  annotate(geom = "text", x = 0.5, y = 4.4, label = ant_lb, size = 6, hjust = "outward") + 
+  scale_x_continuous(limits = c(-1.5, 2.2)) + 
+  labs(x = "Effect size (LnRR)", y = "") + 
+  guides(fill = guide_legend(title = NULL)) + 
+  scale_fill_manual(values = c("#00BFFF", "#FF3030")) + 
+  scale_y_discrete(labels = y_axlb) + 
+  submeta_theme
+
+ggsave(filename = "./fig/fig_subpoint.eps", plot = fig_subpoint,
+       width = 170, height =250 , units = "mm", limitsize = FALSE)
+saveRDS(fig_subpoint, "./fig/fig_subpoint.RData")
+```
+
+```{r test_of_hypothesis_for_point_dis}
+# caculate the probability for p(separate - subpoint)
+dishyp_nox <- info_submeta(sub_nox_pointdis$point_dis_caselab)$hyp
+dishyp_o3 <- info_submeta(sub_o3_pointdis$point_dis_caselab)$hyp
+dishyp_so2 <- info_submeta(sub_so2_pointdis$point_dis_caselab)$hyp
+dishyp_pm <- info_submeta(sub_pm_pointdis$point_dis_caselab)$hyp
+```
+
+### leaf fallen
+```{r draw_leaf_submeta}
+trtname <- c("Defoliation", "Leaf")
+nl <- c("NOx", "O3", "SO2", "PM")
+leaf_nox <- extract_submeta(sub_nox_leaf$leaf_caselab, trtname, "NOx")
+leaf_o3 <- extract_submeta(sub_o3_leaf$leaf_stulab, trtname, "O3")
+leaf_so2 <- extract_submeta(sub_so2_leaf$leaf_stulab, trtname, "SO2")
+leaf_pm <- extract_submeta(sub_pm_leaf$leaf_caselab, trtname, "PM")
+
+post_samples <- bind_rows(leaf_nox$samples, leaf_o3$samples, leaf_so2$samples, leaf_pm$samples)
+post_summ <- bind_rows(leaf_nox$summarise, leaf_o3$summarise, leaf_so2$summarise, 
+                           leaf_pm$summarise)
+
+post_samples <- post_samples %>%
+  mutate(pollutants = factor(pollutants, levels = nl))
+post_summ <- post_summ %>%
+  mutate(pollutants = factor(pollutants, levels = nl))
+post_summ <- post_summ %>% 
+  mutate(l95 = sprintf("%0.2f", lower95),
+         u95 = sprintf("%0.2f", upper95),
+         val = sprintf("%0.2f", value))
+ant_lb <- "n,   mean,   95%CrI"
+
+fig_leaffall <- ggplot(data = post_samples, aes(x = value, y = pollutants, fill = types)) + 
+  geom_text(data = post_summ, aes(label = glue("n={nobs}, {val}, [{l95}, {u95}]"), x = 0.5), hjust = "outward", vjust = 3, position = position_dodge(1), size = 6) + 
+  stat_halfeye(.width = 0.95, size = 2, 
+               position = position_dodge(1), 
+               point_interval = mean_qi, scale = 1) + 
+  geom_vline(xintercept = 0, linetype = "dashed", size = 1, color = "steelblue") + 
+  geom_hline(yintercept = c(1.35, 2.36, 3.35), linetype = "twodash", color = "grey", size = 1) + 
+  annotate(geom = "text", x = 0.5, y = 4.4, label = ant_lb, size = 6, hjust = "outward") + 
+  scale_x_continuous(limits = c(-1.5, 2.2)) + 
+  labs(x = "Effect size (LnRR)", y = "") + 
+  guides(fill = guide_legend(title = NULL)) + 
+  scale_fill_manual(values = c("#FFC125", "#2E8B57")) + 
+  scale_y_discrete(labels = y_axlb) + 
+  submeta_theme
+
+ggsave(filename = "./fig/fig_leaffall.eps", plot = fig_leaffall,
+       width = 170, height = 250, units = "mm", limitsize = FALSE)
+saveRDS(fig_leaffall, "./fig/fig_leaffall.RData")
+```
+
+```{r test_of_hypothesis_for_season}
+# caculate the probability for p(winter - summer) (p(leaf fallen season - leaf growing season))
+seahyp_nox <- info_submeta(sub_nox_leaf$leaf_caselab)$hyp
+seahyp_o3 <- info_submeta(sub_o3_leaf$leaf_stulab)$hyp
+seahyp_so2 <- info_submeta(sub_so2_leaf$leaf_stulab)$hyp
+seahyp_pm <- info_submeta(sub_pm_leaf$leaf_caselab)$hyp
+```
+
+### green land type
+
+```{r draw_submeta_greentype}
+trtname <- c("Forest", "Roadside tree", "Park", "Small patch")
+land_nox <- extract_submeta(sub_nox_gi$`gi_stulab/caselab`, trtname, "NOx")
+land_o3 <- extract_submeta(sub_o3_gi$gi_caselab, trtname, "O3")
+land_so2 <- extract_submeta(sub_so2_gi$`gi_stulab/caselab`, trtname[c(1, 2, 4)], "SO2")
+land_pm <- extract_submeta(sub_pm_gi$`gi_stulab/caselab`, trtname, "PM")
+
+post_samples <- bind_rows(land_nox$samples, land_o3$samples, land_so2$samples, land_pm$samples)
+post_summ <- bind_rows(land_nox$summarise, land_o3$summarise, land_so2$summarise, 
+                           land_pm$summarise)
+post_samples <- post_samples %>%
+  mutate(pollutants = factor(pollutants, levels = nl))
+post_summ <- post_summ %>%
+  mutate(pollutants = factor(pollutants, levels = nl))
+post_summ <- post_summ %>% 
+  mutate(l95 = sprintf("%0.2f", lower95),
+         u95 = sprintf("%0.2f", upper95),
+         val = sprintf("%0.2f", value))
+ant_lb <- "n,   mean,   95%CrI"
+
+fig_landexp <- ggplot(data = post_samples, aes(x = value, y = pollutants, fill = types)) + 
+  geom_text(data = post_summ, aes(label = glue("n={nobs}, {val}, [{l95}, {u95}]"), x = 0.9), hjust = "outward", vjust = 2, position = position_dodge(0.7), size = 6) + 
+  stat_halfeye(.width = 0.95, size = 2, 
+               position = position_dodge(0.7), 
+               point_interval = mean_qi, scale = 0.7) + 
+  geom_vline(xintercept = 0, linetype = "dashed", size = 1, color = "steelblue") + 
+  geom_hline(yintercept = c(1.35, 2.36, 3.35), linetype = "twodash", color = "grey", size = 1) + 
+  annotate(geom = "text", x = 0.9, y = 4.4, label = ant_lb, size = 6, hjust = "outward") + 
+  labs(x = "Effect size (LnRR)", y = "") + 
+  guides(fill = guide_legend(title = NULL)) + 
+  scale_y_discrete(labels = y_axlb) + 
+  scale_fill_manual(values = c("#00CD00", "#00B2EE", "#FFA500", "#FF4500"))+
+  submeta_theme
+
+saveRDS(fig_landexp, file = "./fig/fig_landexp.RData")
+ggsave(filename = "./fig/fig_landexp.eps", plot = fig_landexp,
+       width = 170, height = 250, units = "mm", limitsize = FALSE)
+```
+
+```{r test_of_hypothesis_for_land_type}
+# caculate the probability for 6 combination of hypothesis 
+gihyp_nox <- info_submeta(sub_nox_gi$`gi_stulab/caselab`)$hyp
+gihyp_o3 <- info_submeta(sub_o3_gi$gi_caselab)$hyp
+gihyp_so2 <- info_submeta(sub_so2_gi$`gi_stulab/caselab`)$hyp
+gihyp_pm <- info_submeta(sub_pm_gi$`gi_stulab/caselab`)$hyp
+```
+
+### Combine figures in a grid figure
+
+```{r submeta_allinone}
+fig_subpoint <- readRDS("./fig/fig_subpoint.RData")
+fig_leaffall <- readRDS("./fig/fig_leaffall.RData")
+fig_landexp <- readRDS("./fig/fig_landexp.RData")
+
+fig_submeta <- ggarrange(fig_subpoint, fig_leaffall, fig_landexp, nrow = 1,
+                         ncol = 3, labels = letters[c(1:3)],
+                         font.label = list(size = 25, face = "bold"))
+ggsave(filename = "./fig/fig2.eps", plot = fig_submeta,
+       width = 510, height = 250, units = "mm", limitsize = FALSE)
+saveRDS(fig_submeta, file = "./fig/fig2.RData")
+```
+
+# Figure 3: Sub-group analysis: leaf types and life forms
+
+## Prepare data
+```{r prepare_data_for_fig3}
+es_regdivlite <- es_regdiv %>% 
+  dplyr::select(author, year, area, Journal, method, p_type1, stulab, stuid, caselab, 
+         obid_l1, es_adj, var_adj, se_adj, `dominant species`, family, 
+         leaf_type, evergreen_forest, habitus) %>%
+  mutate(reduction = ifelse(es_adj > 0, "None", "Reduction"))
+es_regdivpm <- es_regdivlite %>% filter(p_type1 == "PM")
+es_regdivnox <- es_regdivlite %>% filter(p_type1 == "NOX")
+es_regdivo3 <- es_regdivlite %>% filter(p_type1 == "O3")
+es_regdivso2 <- es_regdivlite %>% filter(p_type1 == "SO2")
+```
+
+## build models
+
+### leaf type and life forms analysis for PM
+
+```{r pm_leaftype_life_forms}
+# leaf shape 
+popef <- c("leaf_type")
+grpef <- c("stulab", "caselab")
+brmspara <- list(cores = 8L, seed = 1234, prior = NULL, iter = 3000,
+                 max_treedepth = 12, adapt_delta = 0.99)
+
+sub_pm_leaftrait <- sub_single(data = es_regdivpm %>% filter(leaf_type != "None"),
+                               popef = popef, grpef = grpef, nested = TRUE, brmspara = brmspara,
+                               intercept = FALSE)
+saveRDS(sub_pm_leaftrait, file = "./model/sub_pm_leaftrait.RData")
+
+# forest_type
+popef <- c("evergreen_forest")
+sub_pm_foresttype <- sub_single(data = es_regdivpm %>% filter(evergreen_forest != "None"),
+                               popef = popef, grpef = grpef, nested = TRUE, brmspara = brmspara,
+                               intercept = FALSE)
+saveRDS(sub_pm_foresttype, file = "./model/sub_pm_foresttype.RData")
+```
+
+### leaf type and life forms analysis for NOx
+
+```{r nox_leaftype_life_forms}
+# leaf shape 
+popef <- c("leaf_type")
+grpef <- c("stulab", "caselab")
+brmspara <- list(cores = 8L, seed = 1234, prior = NULL, iter = 3000,
+                 max_treedepth = 12, adapt_delta = 0.99)
+
+sub_nox_leaftrait <- sub_single(data = es_regdivnox %>% filter(leaf_type != "None"),
+                               popef = popef, grpef = grpef, nested = TRUE, brmspara = brmspara,
+                               intercept = FALSE)
+saveRDS(sub_nox_leaftrait, file = "./model/sub_nox_leaftrait.RData")
+
+# forest_type
+popef <- c("evergreen_forest")
+sub_nox_foresttype <- sub_single(data = es_regdivnox %>% filter(evergreen_forest != "None"),
+                               popef = popef, grpef = grpef, nested = TRUE, brmspara = brmspara,
+                               intercept = FALSE)
+saveRDS(sub_nox_foresttype, file = "./model/sub_nox_foresttype.RData")
+```
+
+### leaf type and life forms analysis for O3
+
+```{r o3_leaftype_life_forms}
+# o3
+# leaf shape 
+popef <- c("leaf_type")
+grpef <- c("stulab", "caselab")
+brmspara <- list(cores = 8L, seed = 1234, prior = NULL, iter = 3000,
+                 max_treedepth = 12, adapt_delta = 0.99)
+
+sub_o3_leaftrait <- sub_single(data = es_regdivo3 %>% filter(leaf_type != "None"),
+                               popef = popef, grpef = grpef, nested = TRUE, brmspara = brmspara,
+                               intercept = FALSE)
+saveRDS(sub_o3_leaftrait, file = "./model/sub_o3_leaftrait.RData")
+
+# forest_type
+popef <- c("evergreen_forest")
+sub_o3_foresttype <- sub_single(data = es_regdivo3 %>% filter(evergreen_forest != "None"),
+                               popef = popef, grpef = grpef, nested = TRUE, brmspara = brmspara,
+                               intercept = FALSE)
+saveRDS(sub_o3_foresttype, file = "./model/sub_o3_foresttype.RData")
+```
+
+### leaf type and life forms analysis for SO2
+
+```{r so2_leaftype_life_forms}
+#SO2
+# leaf shape 
+popef <- c("leaf_type")
+grpef <- c("stulab", "caselab")
+brmspara <- list(cores = 8L, seed = 1234, prior = NULL, iter = 3000,
+                 max_treedepth = 12, adapt_delta = 0.99)
+
+sub_so2_leaftrait <- sub_single(data = es_regdivso2 %>% filter(leaf_type != "None"),
+                               popef = popef, grpef = grpef, nested = TRUE, brmspara = brmspara,
+                               intercept = FALSE)
+saveRDS(sub_so2_leaftrait, file = "./model/sub_so2_leaftrait.RData")
+
+# forest_type
+popef <- c("evergreen_forest")
+sub_so2_foresttype <- sub_single(data = es_regdivso2 %>% filter(evergreen_forest != "None"),
+                               popef = popef, grpef = grpef, nested = TRUE, brmspara = brmspara,
+                               intercept = FALSE)
+saveRDS(sub_so2_foresttype, file = "./model/sub_so2_foresttype.RData")
+```
+
+## draw the results of submeta
+
+### load models
+```{r read_leaf_trait_models}
+# read model from files
+# PM
+sub_pm_foresttype <- readRDS("./model/sub_pm_foresttype.RData")
+sub_pm_leaftrait <- readRDS("./model/sub_pm_leaftrait.RData")
+# SO2
+sub_so2_foresttype <- readRDS("./model/sub_so2_foresttype.RData")
+sub_so2_leaftrait <- readRDS("./model/sub_so2_leaftrait.RData")
+# O3
+sub_o3_foresttype <- readRDS("./model/sub_o3_foresttype.RData")
+sub_o3_leaftrait <- readRDS("./model/sub_o3_leaftrait.RData")
+# nox
+sub_nox_foresttype <- readRDS("./model/sub_nox_foresttype.RData")
+sub_nox_leaftrait <- readRDS("./model/sub_nox_leaftrait.RData")
+```
+
+### draw leaf shape
+
+```{r draw_leaf_trait}
+trtname <- c("broadleaf", "coniferous")
+nl <- c("NOx", "O3", "SO2", "PM")
+leaft_nox <- extract_submeta(sub_nox_leaftrait$leaf_type_stulab, trtname, "NOx")
+leaft_o3 <- extract_submeta(sub_o3_leaftrait$leaf_type_stulab, trtname, "O3")
+leaft_so2 <- extract_submeta(sub_so2_leaftrait$leaf_type_caselab, trtname, "SO2")
+leaft_pm <- extract_submeta(sub_pm_leaftrait$leaf_type_stulab, trtname, "PM")
+
+leaft_summ <- bind_rows(leaft_nox$summarise, leaft_o3$summarise, 
+                        leaft_so2$summarise, leaft_pm$summarise)
+
+post_leaft <- bind_rows(leaft_nox$samples, leaft_o3$samples, 
+                        leaft_so2$samples, leaft_pm$samples)
+
+post_leaft <- post_leaft %>%
+  mutate(pollutants = factor(pollutants, levels = nl))
+leaft_summ <- leaft_summ %>%
+  mutate(pollutants = factor(pollutants, levels = nl))
+leaft_summ <- leaft_summ %>% 
+  mutate(l95 = sprintf("%0.2f", lower95),
+         u95 = sprintf("%0.2f", upper95),
+         val = sprintf("%0.2f", value))
+ant_lb <- "n,   mean,   95%CrI"
+
+submeta_theme <- theme(panel.grid = element_blank(), 
+                       panel.background = element_rect(fill = "white", color = "black"),
+                       axis.title = element_text(size = 25), 
+                       axis.text.x = element_text(size = 23), 
+                       axis.text.y = element_text(size = 23), 
+                       legend.position = "bottom", 
+                       legend.text = element_text(size = 20))
+y_axlb <- c("NOx" = expression(NO[x]), 
+            "O3" = expression(O[3]),
+            "SO2" = expression(SO[2]),
+            "PM" = expression(PM))
+
+fig_leaft <- ggplot(data = post_leaft, aes(x = value, y = pollutants, fill = types)) + 
+  geom_text(data = leaft_summ, aes(label = glue("n={nobs}, {val}, [{l95}, {u95}]"), x = 0.7), hjust = "outward", vjust = 0.3, position = position_dodge(1), size = 6) + 
+  stat_halfeye(.width = 0.95, size = 2, 
+               position = position_dodge(1), 
+               point_interval = mean_qi, scale = 1) + 
+  geom_vline(xintercept = 0, linetype = "dashed", size = 1, color = "steelblue") + 
+  geom_hline(yintercept = c(1.3, 2.3, 3.3), linetype = "twodash", color = "grey", size = 1) + 
+  annotate(geom = "text", x = 0.7, y = 4.5, label = ant_lb, size = 6, hjust = "outward") + 
+  scale_x_continuous(limits = c(-2.5, 3)) +
+  labs(x = "Effect size (LnRR)", y = "") + 
+  guides(fill = guide_legend(title = NULL)) + 
+  scale_fill_manual(values = c("#00BFFF", "#FF3030")) + 
+  scale_y_discrete(labels = y_axlb, expand = expansion(mult = c(0, 0.24))) + 
+  submeta_theme
+
+ggsave(filename = "./fig/fig_leaft.eps", plot = fig_leaft,
+       width = 185, height = 250, units = "mm", limitsize = FALSE)
+saveRDS(fig_leaft, "./fig/fig_leaft.RData")
+```
+
+```{r hyp_test_leaf_shape}
+info_submeta(sub_nox_leaftrait$leaf_type_stulab)$hyp
+info_submeta(sub_o3_leaftrait$leaf_type_stulab)$hyp
+info_submeta(sub_so2_leaftrait$leaf_type_caselab)$hyp
+info_submeta(sub_pm_leaftrait$leaf_type_stulab)$hyp
+```
+
+### draw forest type
+
+```{r draw_leaf_trait}
+trtname <- c("deciduous", "evergreen")
+nl <- c("NOx", "O3", "SO2", "PM")
+forestt_nox <- extract_submeta(sub_nox_foresttype$evergreen_forest_stulab, trtname, "NOx")
+forestt_o3 <- extract_submeta(sub_o3_foresttype$evergreen_forest_stulab, trtname, "O3")
+forestt_so2 <- extract_submeta(sub_so2_foresttype$evergreen_forest_caselab, trtname, "SO2")
+forestt_pm <- extract_submeta(sub_pm_foresttype$evergreen_forest_stulab, trtname, "PM")
+
+forestt_summ <- bind_rows(forestt_nox$summarise, forestt_o3$summarise, 
+                        forestt_so2$summarise, forestt_pm$summarise)
+
+post_forestt <- bind_rows(forestt_nox$samples, forestt_o3$samples, 
+                        forestt_so2$samples, forestt_pm$samples)
+
+post_forestt <- post_forestt %>%
+  mutate(pollutants = factor(pollutants, levels = nl))
+forestt_summ <- forestt_summ %>%
+  mutate(pollutants = factor(pollutants, levels = nl))
+forestt_summ <- forestt_summ %>% 
+  mutate(l95 = sprintf("%0.2f", lower95),
+         u95 = sprintf("%0.2f", upper95),
+         val = sprintf("%0.2f", value))
+ant_lb <- "n,   mean,   95%CrI"
+
+submeta_theme <- theme(panel.grid = element_blank(), 
+                       panel.background = element_rect(fill = "white", color = "black"),
+                       axis.title = element_text(size = 25), 
+                       axis.text.x = element_text(size = 23), 
+                       axis.text.y = element_text(size = 23), 
+                       legend.position = "bottom", 
+                       legend.text = element_text(size = 20))
+y_axlb <- c("NOx" = expression(NO[x]), 
+            "O3" = expression(O[3]),
+            "SO2" = expression(SO[2]),
+            "PM" = expression(PM))
+
+fig_forestt <- ggplot(data = post_forestt, aes(x = value, y = pollutants, fill = types)) + 
+  geom_text(data = forestt_summ, aes(label = glue("n={nobs}, {val}, [{l95}, {u95}]"), x = 0.3), 
+            hjust = "outward", vjust = 0.3, position = position_dodge(0.8), size = 6) + 
+  stat_halfeye(.width = 0.95, size = 2, 
+               position = position_dodge(0.85), 
+               point_interval = mean_qi, scale = 1) + 
+  geom_vline(xintercept = 0, linetype = "dashed", size = 1, color = "steelblue") + 
+  geom_hline(yintercept = c(1.4, 2.44, 3.4), linetype = "twodash", color = "grey", size = 1) + 
+  annotate(geom = "text", x = 0.3, y = 4.5, label = ant_lb, size = 6, hjust = "outward") + 
+  scale_x_continuous(limits = c(-2, 2)) +
+  labs(x = "Effect size (LnRR)", y = "") + 
+  guides(fill = guide_legend(title = NULL)) + 
+  scale_fill_manual(values = c("#FFC125", "#2E8B57")) + 
+  scale_y_discrete(labels = y_axlb, expand = expansion(mult = c(0, 0.26))) + 
+  submeta_theme 
+
+
+ggsave(filename = "./fig/fig_forestt.eps", plot = fig_forestt,
+       width = 185, height = 250, units = "mm", limitsize = FALSE)
+
+saveRDS(fig_forestt, "./fig/fig_forestt.RData")
+```
+
+```{r hyp_test_forest}
+info_submeta(sub_nox_foresttype$evergreen_forest_stulab)$hyp
+info_submeta(sub_o3_foresttype$evergreen_forest_stulab)$hyp
+info_submeta(sub_so2_foresttype$evergreen_forest_caselab)$hyp
+info_submeta(sub_pm_foresttype$evergreen_forest_stulab)$hyp
+```
+
+### combine two figure together
+
+```{r plot_trait}
+fig_trat <- ggarrange(fig_leaft, fig_forestt,
+                      ncol = 2,
+                      font.label = list(size = 25, face = "bold"),
+                      labels = letters[1:2])
+ggsave(filename = "./fig/fig3.eps", plot = fig_trat,
+       width = 400, height = 200, units = "mm", limitsize = FALSE)
+saveRDS(fig_trat, "./fig/fig3.RData")
+
+```
+
+
+
+# Figure 4: Summary of the frequency of patterns in each case
+
+## Prepare data
+
+```{r prepare_data_for_pattern_analysis}
+es_regdivlite <- es_regdiv %>% 
+  dplyr::select(author, year, area, Journal, method, p_type1, stulab, stuid, caselab, 
+         obid_l1, es_adj, var_adj, se_adj, `dominant species`, family, 
+         leaf_type, evergreen_forest, habitus) %>%
+  mutate(reduction = ifelse(es_adj > 0, "None", "Reduction"))
+
+es_divwider <- es_regdivlite %>%
+  dplyr::select(p_type1, family, reduction, obid_l1, es_adj, se_adj) %>%
+  pivot_wider(names_from = family, values_from = family) %>% 
+  pivot_wider(names_from = p_type1, values_from = p_type1) %>%
+  rename(Others = None) %>%
+  dplyr::select(-obid_l1, -es_adj, -se_adj) %>%
+  relocate(PM, NOX, O3, SO2, .after = reduction) %>%
+  dplyr::select(reduction, PM, NOX, O3, SO2, Podocarpaceae, 
+         Cupressaceae, Ginkgoaceae, Sapindaceae,
+         Platanaceae, Salicaceae, Betulaceae, Lauraceae,
+         Fagaceae, Oleaceae, Moraceae, Fabaceae, Pinaceae, Others)
+divna <- is.na(es_divwider)
+es_divwider[divna] <- "None"
+es_divwider <- es_divwider %>%
+  mutate(reduction = ifelse(reduction == "Reduction", "ob", "None"))
+sreduction <- es_divwider$reduction
+es_divwider[!divna] <- "ob"
+es_divwider$reduction <- sreduction
+```
+
+
+## Draw the figure
+
+```{r draw_the_results_of_pattern_analysis}
+setEPS(width = 10, height = 8)
+postscript("./fig/fig4.eps")
+zPatterns(es_divwider, label = "ob", axis.labels = c("Effect", "Pattern"),
+          bar.ordered = c(TRUE, FALSE), bar.labels = TRUE, 
+          cell.colors = c("#2E8B57", "white"), cell.labels = c("Observed","Unobserved"),
+          bar.colors = c("ff9933", "ff9933"))
+dev.off()
+```
+
+# Figure 5:  Meta-regression
+
+## Functions for build regression models
+
+```{r single_term_regression}
+# This function builds a meta regression model based on the fixed and random effects of input
+# popef: fixed effect
+# grpef: random effect
+# brmspara: parameters for brms function
+# high memory demand for this function, better run in systems > 16GB
+reg_single <- function(data, popef, grpef, brmspara){
+  mod_formula <- t(outer(popef, grpef, FUN = paste_formual))
+  mod_names <- t(outer(popef, grpef, FUN = paste, sep = "_"))
+  mod_formula <- as.character(mod_formula)
+  mod_names <- as.character(mod_names)
+  print(paste("We have", length(mod_formula), "models.", sep = " "))
+  brms_list <- vector(mode = "list", length = length(mod_formula))
+  for(i in seq_along(mod_formula)){
+    print(paste("Fitting model:", mod_formula[i], sep = " "))
+    mod_i <- brm(formula = formula(mod_formula[i]), data = data,
+                 cores = brmspara$cores, seed = brmspara$seed, iter = brmspara$iter,
+                 control = list(max_treedepth = brmspara$max_treedepth,
+                                adapt_delta = brmspara$adapt_delta))
+    brms_list[[i]] <- mod_i
+  }
+  names(brms_list) <- mod_names
+  return(brms_list)
+}
+
+# This function automatically extract regression information from a meta-regression model
+info_regmodel <- function(brmsfit){
+  model_f <- as.character(brmsfit$formula)[1]
+  slope_name <- model_f %>%
+    str_extract("\\~.*?\\+") %>%
+    str_remove("\\~ ") %>%
+    str_remove(" \\+")
+  n_obs <- nrow(brmsfit$data)
+  fix_mod <- fixef(brmsfit)[2, 1]
+  if(fix_mod > 0){
+    test_mod <- hypothesis(brmsfit, paste(slope_name, ">0", sep =""))
+    test_mod_pval <- round(test_mod$hypothesis$Post.Prob, 2)
+    test_reslabel <- paste("Pr(slope > 0) = ", test_mod_pval, sep = "")
+  }else{
+    test_mod <- hypothesis(brmsfit, paste(slope_name, "<0", sep = ""))
+    test_mod_pval <- round(test_mod$hypothesis$Post.Prob, 2)
+    test_reslabel <- paste("Pr(slope < 0) = ", test_mod_pval, sep = "")
+  }
+  nobs_label <- paste("N = ", n_obs, sep = "")
+  model_r2 <- bayes_R2(brmsfit)
+  r2_label <- paste("R2=", round(model_r2[, 1], 2), 
+                    " [", round(model_r2[, 3], 2), ", ", 
+                    round(model_r2[, 4], 2), "]", sep = "")
+  model_summ <- paste(nobs_label, "\n", r2_label, "\n", test_reslabel, sep = "")
+  return(model_summ)
+}
+# draw a scatter point for regression model
+# brmsfit: brmsfit object
+# theme: theme for plot
+# xlab, ylab: labs for plot
+# posx, posy: position for text label 
+# fill: color for points
+# limits_x, limits_y: scale limits
+# modeltext: draw the information of regression model?
+draw_regmodel <- function(brmsfit, theme, xlab, ylab, posx, posy, 
+                          fill, limits_x = NULL, limits_y = NULL,
+                          modeltext = TRUE){
+  model_f <- as.character(brmsfit$formula)[1]
+  slope_name <- model_f %>%
+    str_extract("\\~.*?\\+") %>%
+    str_remove("\\~ ") %>%
+    str_remove(" \\+")
+  model_data <- brmsfit$data
+  n_obs <- nrow(model_data)
+  colnames(model_data)[3] <- "mod"
+  model_cond <- conditional_effects(brmsfit)
+  smooth_x <- eval(parse(text = paste("model_cond", "$", slope_name, "$", slope_name, sep = "")))
+  smooth_y <- eval(parse(text = paste("model_cond", "$", slope_name, "$", "estimate__", sep = "")))
+  smooth_ymin <- eval(parse(text = paste("model_cond", "$", slope_name, "$", "lower__", sep = "")))
+  smooth_ymax <- eval(parse(text = paste("model_cond", "$", slope_name, "$", "upper__", sep = "")))
+  fix_mod <- fixef(brmsfit)[2, 1]
+  if(fix_mod > 0){
+    test_mod <- hypothesis(brmsfit, paste(slope_name, ">0", sep =""))
+    test_mod_pval <- round(test_mod$hypothesis$Post.Prob, 2)
+    test_reslabel <- paste("Pr(slope > 0) = ", test_mod_pval, sep = "")
+  }else{
+    test_mod <- hypothesis(brmsfit, paste(slope_name, "<0", sep = ""))
+    test_mod_pval <- round(test_mod$hypothesis$Post.Prob, 2)
+    test_reslabel <- paste("Pr(slope < 0) = ", test_mod_pval, sep = "")
+  }
+  nobs_label <- paste("N = ", n_obs, sep = "")
+  model_r2 <- bayes_R2(brmsfit)
+  r2_label <- paste("R2=", round(model_r2[, 1], 2), 
+                    " [", round(model_r2[, 3], 2), ", ", 
+                    round(model_r2[, 4], 2), "]", sep = "")
+  model_summ <- ifelse(modeltext,
+                       paste(nobs_label, "\n", r2_label, "\n", test_reslabel, sep = ""),
+                       "")
+  
+  
+  fig <- ggplot() + 
+    geom_smooth(aes(x = smooth_x, y = smooth_y, ymin = smooth_ymin, ymax = smooth_ymax),
+                    stat = "identity", size = 1.5, linetype = 1, alpha = 1, fill = "#D4D4D4")+
+    geom_point(aes(x = mod, y = es_adj, size = se_adj), 
+               data = model_data, shape = 21, fill = fill) + 
+    geom_hline(yintercept = 0, lty = "dotted") + 
+    annotate(geom = 'text', x = posx, y = posy, size = 6, label = model_summ) + 
+    labs(x = xlab, y = ylab) +
+    scale_y_continuous(limits = limits_y) + 
+    scale_x_continuous(limits = limits_x) +
+    theme
+  return(fig)
+}
+
+```
+
+## Build the regression models
+
+### O3 regression models
+```{r o3_regression}
+o3_all <- es_regdata %>% filter(p_type1 == "O3")
+popef <- c("distance", "ave_con", "rh", "wind", "temperature", "greencover")
+grpef <- c("stulab","caselab")
+
+brmspara <- list(cores = 8L, seed = 1234, prior = NULL, iter = 3000,
+                 max_treedepth = 14, adapt_delta = 0.99)
+reg_o3_allpoint <- reg_single(data = o3_all, popef = popef, grpef = grpef, brmspara = brmspara)
+
+saveRDS(reg_o3_allpoint, "./model/reg_o3_allpoint.RData")
+```
+
+### NOx regression models
+```{r nox_regression}
+nox_all <- es_regdata %>% filter(p_type1 == "NOX")
+popef <- c("distance", "ave_con", "rh","temperature", "greencover", "wind")
+grpef <- c("stulab", "caselab")
+
+brmspara <- list(cores = 8L, seed = 1234, prior = NULL, iter = 3000,
+                 max_treedepth = 14, adapt_delta = 0.99)
+reg_nox_allpoint <- reg_single(data = nox_all, popef = popef, grpef = grpef, brmspara = brmspara)
+
+saveRDS(reg_nox_allpoint, "./model/reg_nox_allpoint.RData")
+```
+
+### SO2 regression models
+```{r SO2_regression}
+so2_all <- es_regdata %>% filter(p_type1 == "SO2")
+brmspara <- list(cores = 8L, seed = 1234, prior = NULL, iter = 3000,
+                 max_treedepth = 14, adapt_delta = 0.99)
+popef <- c("distance", "ave_con","temperature", "greencover", "wind", "rh")
+grpef <- c("caselab", "stulab")
+
+reg_so2_allpoint <- reg_single(data = so2_all, popef = popef, grpef = grpef, brmspara = brmspara)
+saveRDS(reg_so2_allpoint, "./model/reg_so2_allpoint.RData")
+```
+
+### PM regression models
+```{r PM_regression}
+pm_all <- es_regdata %>% filter(p_type1 == "PM")
+popef <- c("ave_con", "greencover", "wind", "rh")
+grpef <- c("caselab")
+
+popef <- c("distance", "temperature")
+grpef <- c("stulab")
+
+brmspara <- list(cores = 8L, seed = 1234, prior = NULL, iter = 3000,
+                 max_treedepth = 14, adapt_delta = 0.99)
+reg_pm_allpoint <- reg_single(data = pm_all, popef = popef, grpef = grpef, brmspara = brmspara)
+reg_pm_allpoint2 <- reg_single(data = pm_all, popef = popef, grpef = grpef, brmspara = brmspara)
+saveRDS(reg_pm_allpoint, "./model/reg_pm_allpoint.RData")
+```
+
+## Draw the results of regression models
+
+### NOx regression plot
+
+```{r NOx regression plot}
+reg_theme <- theme(panel.grid = element_blank(), 
+                   panel.background = element_rect(fill = "white", color = "black"),
+                   legend.position = 'none', 
+                   axis.title = element_text(size = 20), 
+                   axis.text.x = element_text(size = 15),
+                   axis.text.y = element_text(size = 15))
+
+reg_nox_allpoint <- readRDS("./model/reg_nox_allpoint.RData")
+fig_nox_distance <- draw_regmodel(reg_nox_allpoint$distance_stulab,
+                                  theme = reg_theme,
+                                  xlab = "Distance (m)",
+                                  ylab = "",
+                                  posx = 0, posy = 0,
+                                  fill = color_forest$nox_fill,
+                                  modeltext = F)
+  
+fig_nox_conc <- draw_regmodel(reg_nox_allpoint$ave_con_stulab,
+                              theme = reg_theme,
+                              xlab = latex2exp::TeX("Concentration ($\\mu$g)"),
+                              ylab = "",
+                              posx = 0, posy = 0,
+                              fill = color_forest$nox_fill,
+                              modeltext = F)
+
+fig_nox_green <- draw_regmodel(reg_nox_allpoint$greencover_caselab,
+                               theme = reg_theme,
+                               xlab = "Green area coverage (%)",
+                               ylab = "",
+                               posx = 0, posy = 0,
+                               fill = color_forest$nox_fill,
+                               modeltext = F)
+
+fig_nox_airt <- draw_regmodel(reg_nox_allpoint$temperature_caselab, 
+                              theme = reg_theme, 
+                              xlab = "Air temeperature (°C)",
+                              ylab = "",
+                              posx = 0, posy = 0,
+                              fill = color_forest$nox_fill,
+                              modeltext = F)
+
+fig_nox_rh <- draw_regmodel(reg_nox_allpoint$rh_stulab,
+                            theme = reg_theme,
+                            xlab = "Relative humidity (%)",
+                            ylab = "",
+                            posx = 0, posy = 0,
+                            fill = color_forest$nox_fill,
+                            modeltext = F,
+                            limits_x = c(45, 90))
+
+fig_nox_ws <- draw_regmodel(reg_nox_allpoint$wind_stulab,
+                            theme = reg_theme,
+                            xlab = "Wind speed (m/s)",
+                            ylab = "",
+                            posx = 0, posy = 0,
+                            fill = color_forest$nox_fill,
+                            modeltext = F)
+
+fig_nox_list <- list(fig_nox_distance, fig_nox_conc, fig_nox_green,
+                     fig_nox_airt, fig_nox_rh, fig_nox_ws)
+fig_nox_all <- ggarrange(plotlist = fig_nox_list, 
+                         labels = letters[1:6], 
+                         ncol = 3, nrow =2, 
+                         align = "v")
+
+ggsave(file = "./fig/fig_nox_all.eps", 
+       plot = fig_nox_all, 
+       width = 300, height = 150, 
+       units = "mm", limitsize = FALSE)
+saveRDS(fig_nox_all,
+        file = "./fig/fig_nox_all.RData")
+```
+
+### SO2 regression plot
+
+```{r so2 regression plot}
+reg_so2_allpoint <- readRDS("./model/reg_so2_allpoint.RData")
+
+fig_so2_distance <- draw_regmodel(reg_so2_allpoint$distance_caselab,
+                                  theme = reg_theme,
+                                  xlab = "Distance (m)",
+                                  ylab = "",
+                                  posx = 0, posy = 0,
+                                  fill = color_forest$so2_fill,
+                                  modeltext = F)
+  
+fig_so2_conc <- draw_regmodel(reg_so2_allpoint$ave_con_caselab,
+                              theme = reg_theme,
+                              xlab = latex2exp::TeX("Concentration ($\\mu$g)"),
+                              ylab = "",
+                              posx = 0, posy = 0,
+                              fill = color_forest$so2_fill,
+                              modeltext = F)
+
+fig_so2_green <- draw_regmodel(reg_so2_allpoint$greencover_caselab,
+                               theme = reg_theme,
+                               xlab = "Green area coverage (%)",
+                               ylab = "",
+                               posx = 0, posy = 0,
+                               fill = color_forest$so2_fill,
+                               modeltext = F)
+
+fig_so2_airt <- draw_regmodel(reg_so2_allpoint$temperature_caselab, 
+                              theme = reg_theme, 
+                              xlab = "Air temeperature (°C)",
+                              ylab = "",
+                              posx = 0, posy = 0,
+                              fill = color_forest$so2_fill,
+                              modeltext = F)
+
+fig_so2_rh <- draw_regmodel(reg_so2_allpoint$rh_stulab,
+                            theme = reg_theme,
+                            xlab = "Relative humidity (%)",
+                            ylab = "",
+                            posx = 0, posy = 0,
+                            fill = color_forest$so2_fill,
+                            limits_x = c(47, 80),
+                            modeltext = F)
+
+fig_so2_ws <- draw_regmodel(reg_so2_allpoint$wind_caselab,
+                            theme = reg_theme,
+                            xlab = "Wind speed (m/s)",
+                            ylab = "",
+                            posx = 0, posy = 0,
+                            fill = color_forest$so2_fill,
+                            modeltext = F)
+
+fig_so2_list <- list(fig_so2_distance, fig_so2_conc, fig_so2_green,
+                     fig_so2_airt, fig_so2_rh, fig_so2_ws)
+fig_so2_all <- ggarrange(plotlist = fig_so2_list, 
+                         labels = letters[13:18], 
+                         ncol = 3, nrow = 2,
+                         align = "v")
+
+ggsave(file = "./fig/fig_so2_all.eps", 
+       plot = fig_so2_all, 
+       width = 300, height = 150, 
+       units = "mm", limitsize = FALSE)
+saveRDS(fig_so2_all,
+        file = "./fig/fig_so2_all.RData")
+```
+
+### O3 regression plot
+
+```{r o3 regression plot}
+reg_o3_allpoint <- readRDS("./model/reg_o3_allpoint.RData")
+fig_o3_distance <- draw_regmodel(reg_o3_allpoint$distance_caselab,
+                                  theme = reg_theme,
+                                  xlab = "Distance (m)",
+                                  ylab = "",
+                                  posx = 0, posy = 0,
+                                  fill = color_forest$o3_fill,
+                                  modeltext = F)
+  
+fig_o3_conc <- draw_regmodel(reg_o3_allpoint$ave_con_caselab,
+                              theme = reg_theme,
+                              xlab = latex2exp::TeX("Concentration ($\\mu$g)"),
+                              ylab = "",
+                              posx = 0, posy = 0,
+                              fill = color_forest$o3_fill,
+                              modeltext = F)
+
+fig_o3_green <- draw_regmodel(reg_o3_allpoint$greencover_stulab,
+                               theme = reg_theme,
+                               xlab = "Green area coverage (%)",
+                               ylab = "",
+                               posx = 0, posy = 0,
+                               fill = color_forest$o3_fill,
+                               modeltext = F,
+                               limits_x = c(0.05,0.85))
+
+fig_o3_airt <- draw_regmodel(reg_o3_allpoint$temperature_stulab, 
+                              theme = reg_theme, 
+                              xlab = "Air temeperature (°C)",
+                              ylab = "",
+                              posx = 0, posy = 0,
+                              fill = color_forest$o3_fill,
+                              modeltext = F,
+                              limits_x = c(8, 32))
+
+fig_o3_rh <- draw_regmodel(reg_o3_allpoint$rh_caselab,
+                            theme = reg_theme,
+                            xlab = "Relative humidity (%)",
+                            ylab = "",
+                            posx = 0, posy = 0,
+                            fill = color_forest$o3_fill,
+                            modeltext = F,
+                            limits_x = c(50, 85))
+
+fig_o3_ws <- draw_regmodel(reg_o3_allpoint$wind_caselab,
+                            theme = reg_theme,
+                            xlab = "Wind speed (m/s)",
+                            ylab = "",
+                            posx = 0, posy = 0,
+                            fill = color_forest$o3_fill,
+                            modeltext = F)
+
+fig_o3_list <- list(fig_o3_distance, fig_o3_conc, fig_o3_green,
+                     fig_o3_airt, fig_o3_rh, fig_o3_ws)
+fig_o3_all <- ggarrange(plotlist = fig_o3_list, 
+                        labels = letters[7:12], 
+                        ncol = 3, nrow = 2,  
+                        align = "v")
+
+ggsave(file = "./fig/fig_o3_all.eps", 
+       plot = fig_o3_all, 
+       width = 300, height = 150, 
+       units = "mm", limitsize = FALSE)
+```
+
+### PM regression plot
+
+```{r pm regression plot}
+reg_pm_allpoint <- readRDS("./model/reg_pm_allpoint.RData")
+fig_pm_distance <- draw_regmodel(reg_pm_allpoint$distance_stulab,
+                                  theme = reg_theme,
+                                  xlab = "Distance (m)",
+                                  ylab = "",
+                                  posx = 0, posy = 0,
+                                  fill = color_forest$pm_fill,
+                                  modeltext = F)
+  
+fig_pm_conc <- draw_regmodel(reg_pm_allpoint$ave_con_caselab,
+                              theme = reg_theme,
+                              xlab = latex2exp::TeX("Concentration ($\\mu$g)"),
+                              ylab = "",
+                              posx = 0, posy = 0,
+                              fill = color_forest$pm_fill,
+                              modeltext = F)
+
+fig_pm_green <- draw_regmodel(reg_pm_allpoint$greencover_caselab,
+                               theme = reg_theme,
+                               xlab = "Green area coverage (%)",
+                               ylab = "",
+                               posx = 0, posy = 0,
+                               fill = color_forest$pm_fill,
+                               modeltext = F)
+
+fig_pm_airt <- draw_regmodel(reg_pm_allpoint$temperature_caselab, 
+                              theme = reg_theme, 
+                              xlab = "Air temeperature (°C)",
+                              ylab = "",
+                              posx = 0, posy = 0,
+                              fill = color_forest$pm_fill,
+                              modeltext = F)
+
+fig_pm_rh <- draw_regmodel(reg_pm_allpoint$rh_caselab,
+                            theme = reg_theme,
+                            xlab = "Relative humidity (%)",
+                            ylab = "",
+                            posx = 0, posy = 0,
+                            fill = color_forest$pm_fill,
+                            modeltext = F,
+                            limits_x = c(42, 95))
+
+fig_pm_ws <- draw_regmodel(reg_pm_allpoint$wind_caselab,
+                            theme = reg_theme,
+                            xlab = "Wind speed (m/s)",
+                            ylab = "",
+                            posx = 0, posy = 0,
+                            fill = color_forest$pm_fill,
+                            modeltext = F)
+
+fig_pm_list <- list(fig_pm_distance, fig_pm_conc, fig_pm_green,
+                     fig_pm_airt, fig_pm_rh, fig_pm_ws)
+fig_pm_all <- ggarrange(plotlist = fig_pm_list, 
+                        labels = letters[19:24], 
+                        ncol = 3, nrow = 2,
+                        align = "v")
+
+ggsave(file = "./fig/fig_pm_all.eps", 
+       plot = fig_pm_all, 
+       width = 300, height = 150, 
+       units = "mm", limitsize = FALSE)
+saveRDS(fig_pm_all,
+        file = "./fig/fig_pm_all.RData")
+```
+
+### All regression plot
+
+```{r draw_all_regression}
+fig_reg_list <- c(fig_nox_list, fig_o3_list, fig_so2_list, fig_pm_list)
+
+fig_reg_all <- ggarrange(plotlist = fig_reg_list, 
+                        labels = letters[1:24], 
+                        ncol = 3, nrow = 8,  
+                        align = "v")
+
+ggsave(file = "./fig/fig_reg_all.eps", 
+       plot = fig_reg_all, 
+       width = 300, height = 700, 
+       units = "mm", limitsize = FALSE)
+saveRDS(fig_reg_all,
+        file = "./fig/fig_reg_all.RData")
+```
+
+# Figure 6 The perspectives of urban environmental managers on air phytoremediation in Shenzhen
+
+## Prepare data
+
+```{r prepare_data}
+# questionnaire data
+sz_quesd <- read.csv(file = "./data/sz_questionnaire.csv",
+                     stringsAsFactors = FALSE)
+colnames(sz_quesd)[7] <- "PM"
+
+ques_res <- read.csv(file = "./data/questionnaire_perceptions.csv")
+ques_res <- ques_res %>%
+  mutate(op = factor(op, levels = c(c("Worsen air pollution", "Non-influence", 
+                                      "Mitigate air pollution"))))
+
+
+sz_pattern <- sz_quesd %>% 
+  dplyr::select(PM, NOX, SO2, O3) %>%
+  count(PM, NOX, SO2,O3) %>%
+  arrange(desc(n)) %>%
+  mutate(percentage = round(n/nrow(sz_quesd), 4)*100)
+sz_patternl <- sz_pattern %>% 
+  mutate(patternid = factor(c(1:nrow(sz_pattern)), 
+                            levels = rev(1:nrow(sz_pattern)))) %>%
+  pivot_longer(cols = c("PM", "NOX", "SO2", "O3"),
+               names_to = "Pollutants",
+               values_to = "Response") %>%
+  mutate(Pollutants = factor(Pollutants, levels = c("PM", "NOX", "SO2", "O3")))
+
+theme_pattern <- theme(panel.grid = element_line(linetype = "dashed", 
+                                                 color = "black"),
+                       panel.background = element_rect(fill = NULL, 
+                                                       colour ="black"))
+sz_patternl_sel <- sz_patternl %>% 
+  filter(percentage > quantile(percentage, 0.5))
+nid <- sz_patternl_sel$patternid %>%
+  unique() %>%
+  length()
+```
+
+## Draw the figure
+
+```{r fig6_draw}
+# pattern figure
+library(cowplot)
+fig_quespat <- sz_patternl_sel %>%
+  ggplot(aes(x = Pollutants, y = patternid, fill = Response))+
+  geom_tile(alpha = 1)+
+  geom_vline(xintercept = c(1.5, 2.5, 3.5), linetype = "dashed") +
+  geom_vline(xintercept = 4.5, color = "black") + 
+  geom_hline(yintercept = c(2:nid-1) + 0.5, 
+             linetype = "dashed")+
+  scale_fill_manual(values = c("#ED876B", "#F7DC9C", "#77D9A0")) + 
+  scale_y_discrete(expand = expansion(mult = c(0, 0)),
+                   breaks = c("1", "5", "10", "15", "20")) +
+  scale_x_discrete(expand = expansion(mult = c(0, 0)),
+                   labels = c(expression(PM), expression(NO[x]),  expression(SO[2]), expression(O[3]))) + 
+  ggtitle("b")+
+  theme(panel.background = element_rect(fill = "white", color = "black"),
+        axis.line.y = element_line(colour ="black"),
+        legend.position = "none",
+        axis.title = element_text(face = "bold", colour = "black", size = 30),
+        axis.text = element_text(face = "bold", color = "black", size = 25))
+
+sz_pattern_sel <- sz_pattern %>%
+  filter(percentage > quantile(percentage, 0.5)) %>%
+  mutate(perf = factor(percentage)) %>%
+  mutate(perf = factor(perf, levels = rev(levels(perf))))
+sz_pattern_sel <- sz_pattern_sel %>% 
+  mutate(patternid = factor(c(1:nrow(sz_pattern_sel)), 
+                              levels = rev(1:nrow(sz_pattern_sel))))
+
+# marginal frequency for patterns
+pal_for_bar <- c( "#FF4040", "#FF7256", "#FFAEB9", 
+                  "#EED5D2", "#6495ED", "#B0E0E6", 
+                  "#97FFFF", "#D1EEEE", "#CCCCCC", 
+                  "#737373", "#383838")
+
+fig_paternbar <- ggplot(sz_pattern_sel, aes(y = patternid, x= percentage)) + 
+  geom_bar(stat = "identity", aes(fill = perf)) + 
+  scale_fill_manual(values = pal_for_bar) + 
+  theme_half_open() +
+  theme(axis.title = element_blank(),
+        axis.ticks = element_blank(),
+        axis.line = element_blank(),
+        axis.text = element_blank())
+
+fig_ques <- ggplot(data = ques_res) + 
+  geom_bar(aes(x = prop, y = p_type, fill = op), stat = "identity", 
+           width = 0.5) + 
+  geom_text(aes(x = textpos, y = p_type, label = prop), color = "black", size = 10) + 
+  labs(x = "Proportion (%)", y = "")+
+  scale_fill_manual(values =  c("#ED876B", "#F7DC9C", "#77D9A0")) + 
+  scale_y_discrete(labels = c(expression(NO[x]), expression(O[3]), expression(PM[2.5]), expression(SO[2]))) + 
+  ggtitle("a") + 
+  theme(legend.position = "bottom",
+        panel.grid = element_blank(),
+        panel.background = element_rect(color = "black", fill = "white"),
+        axis.text = element_text(size = 25, color = "black"),
+        axis.title = element_text(size = 30, color = "black"),
+        axis.ticks.length = unit(-0.1, "cm"),
+        legend.title = element_blank(),
+        legend.text = element_text(size = 25, color = "black"))
+
+
+library(patchwork)
+# using patchwork to define grid
+
+fig_pattern <- fig_ques/(fig_quespat + fig_paternbar + plot_layout(width = c(2, 1)))
+
+ggsave("./fig/fig_pattern.eps", plot = fig_pattern,
+       width = 300, height = 300, units = "mm", limitsize = FALSE)
+```
+
+# Figure 8 The international distribution of case studies.
+
+## Data prepared
+
+```{r fig8_data}
+count_ptype1 <- es_regdata %>% count(p_type1)
+count_cty <- es_regdata %>% count(country)
+count_year <- table(es_regdata %>% count(stulab, year) %>% dplyr::select(year))
+count_year <- count_year %>%
+  data.frame() %>% 
+  rename(year = Var1, n = Freq) %>%
+  arrange(year) %>%
+  mutate(yearf = factor(year, levels = year),
+         grp = "A")
+```
+
+## draw the figure
+
+### Types of pollutants
+
+```{r draw_types_of_pollutants}
+library(ggforce)
+
+fig_ptype1 <- ggplot(data = count_ptype1) + 
+  geom_arc_bar(aes(x0 = 0 , y0 = 0, r0 = 0, r = 1, 
+                   amount = n, fill = p_type1, explode = c(0.05, 0.05, 0.05, 0.05)),
+               stat = "pie", color = "#4F4F4F", size = 1) + 
+  scale_fill_manual(values = c("#ffa9e0", "#9fb8fb",
+                               "#ffe3a7", "#d7d7d7")) + 
+  theme_no_axes() + 
+  theme(legend.position = "none", 
+        legend.title = element_blank(),
+        legend.text = element_text(size = 15),
+        panel.border = element_blank())
+
+ggsave("./fig/fig_ptype1.eps",
+       width = 100, height = 100, units = "mm",
+       limitsize = FALSE)
+
+saveRDS(fig_ptype1, "./fig/fig_ptype1.RData")
+
+```
+
+### country
+
+```{r draw_country}
+
+count_cty <- count_cty %>%
+  arrange(desc(n))
+lb <- c(count_cty$country[1:9], rep("Other countries", 8))
+count_cty2 <- count_cty %>%
+  mutate(ctylb = lb) %>% 
+  group_by(ctylb) %>%
+  summarise(n2 = sum(n)) %>%
+  arrange(desc(n2)) %>%
+  mutate(ctylbf  = factor(ctylb, levels = ctylb)) %>%
+  mutate(ctylbf = relevel(ctylbf, ref = "Other countries"))
+
+count_cty3 <- count_cty[10:17, ] %>%
+  mutate(ctylbf = factor(country, levels = country))
+
+fill_manual <- c("#F7F7F7", "#FF4040", "#FF7256", "#FFAEB9", 
+                  "#EED5D2", "#6495ED", "#B0E0E6", 
+                  "#97FFFF", "#D1EEEE", "#CCCCCC")
+
+fig_country <- ggplot(data = count_cty2) + 
+  geom_arc_bar(aes(x0 = 0 , y0 = 0, r0 = 0, r = 1, 
+                   amount = n2, fill = ctylbf),
+               stat = "pie", color = "#4F4F4F", size = 1) + 
+  theme_no_axes() + 
+  theme(legend.position = "bottom", 
+        legend.title = element_blank(),
+        legend.text = element_text(size = 15),
+        panel.border = element_blank()) + 
+  scale_fill_manual(values = fill_manual)
+
+fig_othercountry <- ggplot(data = count_cty3) + 
+  geom_arc_bar(aes(x0 = 0 , y0 = 0, r0 = 0, r = 1, 
+                   amount = n, fill = ctylbf),
+               stat = "pie", color = "#4F4F4F", size = 1) + 
+  theme_no_axes() + 
+  theme(legend.position = "top", 
+        legend.title = element_blank(),
+        legend.text = element_text(size = 15),
+        panel.border = element_blank()) + 
+  scale_fill_manual(values = fill_manual[2:9])
+
+ggsave("./fig/fig_country.eps", fig_country, 
+       width = 300, height = 300, units = "mm",
+       limitsize = FALSE)
+
+ggsave("./fig/fig_othercountry.eps", fig_othercountry, 
+       width = 200, height = 200, units = "mm",
+       limitsize = FALSE)
+
+```
+
+### Publication year
+
+```{r draw_publication_year}
+fig_year <- ggplot(data = count_year, aes(x = yearf, y = n, group = grp)) + 
+  geom_bar(stat = "identity", fill = "darkblue") + 
+  geom_point(size = 4, colour = "#FF7F00") + 
+  geom_smooth(method = "lm", se = F, color = "darkred", 
+              linetype = 4, size = 2) + 
+  scale_y_continuous(breaks = c(0, 5, 10, 15, 20, 25, 30)) + 
+  reg_theme + 
+  theme(legend.title = element_text(size = 20, colour = "black", face = "bold"),
+        legend.position = "bottom",
+        axis.text.x = element_text(colour = "black", face = "bold", size = 20, angle = 45, hjust = 1),
+        axis.text.y = element_text(colour = "black", face = "bold", size = 20),
+        axis.title = element_text(colour = "black", face = "bold", size = 20),
+        legend.text = element_text(colour = "black", face = "bold", size = 15),
+        legend.key.width = unit(5.5, "cm"))+ 
+  labs(x = "", y = "Number of researches")
+
+ggsave(filename = "./fig/fig_year.eps",fig_year,
+       width = 300, height = 300, 
+       units = "mm",limitsize = FALSE)
+```
+
+### Combine figure
+
+```{r combine_year_and_country}
+fig_yearcty <- ((fig_country+fig_othercountry + plot_layout(widths = c(1, 1)))|fig_year) + 
+  plot_layout(widths = c(2, 1))
+
+ggsave(filename = "./fig/fig_yearcty.eps",fig_yearcty,
+       width = 450, height = 190,
+       units = "mm", limitsize = FALSE)
+```
+
+
+
+
